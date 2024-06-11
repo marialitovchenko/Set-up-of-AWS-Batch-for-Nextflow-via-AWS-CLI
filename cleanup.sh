@@ -1,5 +1,3 @@
-
-
 aws ec2 terminate-instances --instance-ids $INSTANCE_ID
 sleep 30s
 aws ec2 delete-security-group --group-id $SECURITY_GROUP_ID

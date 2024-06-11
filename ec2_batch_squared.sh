@@ -185,22 +185,4 @@ aws s3api create-bucket --bucket $EXECUTING_USER'-'$S3_BUCKET_NAME \
                         --create-bucket-configuration LocationConstraint=$AWS_REGION_NAME
 
 # login to ec2
-aws configure 
-
-
-aws ec2 terminate-instances --instance-ids $INSTANCE_ID
-sleep 30s
-aws ec2 delete-security-group --group-id $SECURITY_GROUP_ID
-
-aws ec2 deregister-image --image-id $CUSTOM_AMI_ID
-
-aws iam remove-user-from-group --user-name  $IAM_USER_NAME \
-                              --group-name $IAM_GROUP_NAME
-aws iam delete-group --group-name $IAM_GROUP_NAME
-
-aws iam detach-role-policy --policy-arn arn:aws:iam::aws:policy/service-role/AmazonEC2SpotFleetTaggingRole \
-                           --role-name $IAM_ROLE_NAME
-aws iam delete-role --role-name $IAM_ROLE_NAME
-
-aws ec2 delete-key-pair --key-name $KEY_PAIR_NAME
-aws iam delete-user  --user-name $IAM_USER_NAME
+aws configure
