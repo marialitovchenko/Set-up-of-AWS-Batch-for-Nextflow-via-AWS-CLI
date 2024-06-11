@@ -4,6 +4,7 @@ AWS_REGION_NAME="eu-west-2"
 AMI_IMAGE_ID="ami-06373f703eb245f45" # Amazon Linux 2023 AMI
 INSTANCE_TYPE="t3.2xlarge"
 EXECUTING_USER="mlitovchenko"
+S3_BUCKET_NAME="s3-test"
 
 IAM_USER_NAME=nextflow-programmatic-access-$EXECUTING_USER
 IAM_GROUP_NAME=nextflow-group-$EXECUTING_USER
@@ -12,6 +13,9 @@ EC2_NAME="nextflow-EC2-"-$EXECUTING_USER
 IAM_ROLE_NAME=AmazonEC2SpotFleetRole
 KEY_PAIR_NAME=$EC2_NAME"-KeyPair"
 EC2_DEFAULT_USER_NAME="ec2-user"
+CUSTOM_AMI_NAME="ami_nextflow_aws_batch_"$EXECUTING_USER
+BATCH_COMPUTE_ENV_NAME="nextflow_aws_batch_"$EXECUTING_USER
+BATCH_JOB_QUEUE_NAME="nextflow_queue_"$EXECUTING_USER
 
 # set AWS profile to the one with suitable permissions
 export AWS_PROFILE=$AWS_PROFILE_NAME
@@ -89,23 +93,106 @@ read -r INSTANCE_ID <<<$(aws ec2 run-instances --image-id $AMI_IMAGE_ID \
                                                --key-name $KEY_PAIR_NAME \
                                                --security-group-ids $SECURITY_GROUP_ID \
                                                --subnet-id $SUBNET_ID \
+                                               --block-device-mappings  '[
+                                                    {
+                                                        "DeviceName": "/dev/xvda",
+                                                        "Ebs": {
+                                                            "VolumeSize": 100,
+                                                            "VolumeType": standard,
+                                                            "DeleteOnTermination": true
+                                                        }
+                                                    }
+                                                ]' \
                                                --output text \
                                                --query "Instances[*].[InstanceId]")
 # rename instance
 aws ec2 create-tags --resources $INSTANCE_ID \
                     --tags Key=Name,Value=$EC2_NAME
+# wait for the instance to be running
+aws ec2 wait instance-status-ok --instance-ids $INSTANCE_ID
 # get public ID address of an instance
 read -r PUBLIC_DNS_NAME <<<$(aws ec2 describe-instances --instance-ids $INSTANCE_ID \
                                                         --query 'Reservations[].Instances[].PublicDnsName' \
                                                         --output text)
 
+# login into EC2
 ssh -i $KEY_PAIR_NAME".pem" $EC2_DEFAULT_USER_NAME"@"$PUBLIC_DNS_NAME
+# install docker on EC2
+# add Docker's official GPG key:
+sudo yum update -y
+sudo yum install ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+# add the repository to Apt sources:
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo yum update -y
+# install the Docker packages.
+sudo yum install docker -y
+sudo service docker start
+sudo usermod -a -G docker ec2-user
+# install aws cli
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip
+sudo ./aws/install
+exit
+
+read -r CUSTOM_AMI_ID <<<$(aws ec2 create-image --instance-id $INSTANCE_ID \
+                                                --name $CUSTOM_AMI_NAME \
+                                                --no-reboot \
+                                                --output text)
+
+# Step 3 Define AWS Batch compute environment
+# create the compute environment
+aws batch create-compute-environment --compute-environment-name $BATCH_COMPUTE_ENV_NAME \
+                                     --state ENABLED \
+                                     --type MANAGED \
+                                     --compute-resources '
+                                     {
+                                        "type": "SPOT",
+                                        "allocationStrategy": "BEST_FIT_PROGRESSIVE",
+                                        "minvCpus": 0,
+                                        "maxvCpus": 256,
+                                        "desiredvCpus": 0,
+                                        "instanceTypes": ["c4.xlarge","c5.4xlarge"],
+                                        "imageId": "ami-02bdc46746b0733da",
+                                        "subnets": ["subnet-06ad429ad1e0249a9"],
+                                        "securityGroupIds": ["sg-0a5fd049e80442076"],
+                                        "ec2KeyPair": "nextflow-EC2--mlitovchenko-KeyPair",
+                                        "instanceRole": "ecsInstanceRole",
+                                        "placementGroup": "string",
+                                        "bidPercentage": 50,
+                                        "spotIamFleetRole": "AmazonEC2SpotFleetRole"  
+                                    }'
+
+# Step 4 Create an AWS Batch Job queue
+aws batch create-job-queue --job-queue-name $BATCH_JOB_QUEUE_NAME \
+                           --state ENABLED \
+                           --priority 1 \
+                           --compute-environment-order '
+                           [
+                                {
+                                    "order": 1,
+                                    "computeEnvironment": "nextflow_aws_batch_mlitovchenko"
+                                }
+                            ]'
+
+# Step 5 Set up an S3 Bucket for data access
+aws s3api create-bucket --bucket $EXECUTING_USER'-'$S3_BUCKET_NAME \
+                        --create-bucket-configuration LocationConstraint=$AWS_REGION_NAME
+
+# login to ec2
+aws configure 
+
 
 aws ec2 terminate-instances --instance-ids $INSTANCE_ID
 sleep 30s
 aws ec2 delete-security-group --group-id $SECURITY_GROUP_ID
 
-aws iam delete-user  --user-name $IAM_USER_NAME
+aws ec2 deregister-image --image-id $CUSTOM_AMI_ID
 
 aws iam remove-user-from-group --user-name  $IAM_USER_NAME \
                               --group-name $IAM_GROUP_NAME
@@ -114,3 +201,6 @@ aws iam delete-group --group-name $IAM_GROUP_NAME
 aws iam detach-role-policy --policy-arn arn:aws:iam::aws:policy/service-role/AmazonEC2SpotFleetTaggingRole \
                            --role-name $IAM_ROLE_NAME
 aws iam delete-role --role-name $IAM_ROLE_NAME
+
+aws ec2 delete-key-pair --key-name $KEY_PAIR_NAME
+aws iam delete-user  --user-name $IAM_USER_NAME
