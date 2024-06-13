@@ -1,13 +1,115 @@
 #!/bin/bash
-AWS_PROFILE_NAME='ngs_workflows_dev'
-AWS_REGION_NAME='eu-west-2'
-INSTANCE_TYPE='t3.2xlarge'
-EXECUTING_USER='ml'
+#
+# DESCRIPTION: Bash script which creates custom Amazon Machine Image (AMI) with
+# of AWS CLI for the future use with Nextflow and AWS batch. That custom AMI
+# will contain all the software needed for execution of Nextflow tasks. Usually
+# if the pipeline is properly containerized one would only need Docker,
+# AWS CLI and esc (Amazon Elastic Container Service). AWS CLI is needed for
+# communication between AWS batch and EC2 instance which runs the task and EC2
+# instance which launches the Nextflow pipeline. Similarly, esc is needed for
+# communication with container services. Once AMI is created, it can be reused
+# in all Nextflow pipelines.
+# USAGE: Run in command line in Linux-like system
+# OPTIONS: Run ./create_custom_ami.sh -h
+#          to see the full list of options and their descriptions.
+# REQUIREMENTS: AWS CLI & AWS profile profile with permissions to create users,
+#               user groups, security groups and ec2 instances.
+# BUGS: --
+# NOTES:
+# AUTHOR:  Maria Litovchenko
+# VERSION:  1
+# CREATED:  13.06.2024
+# REVISION: 13.06.2024
+#
+#  Copyright (C) 2024, 2024 Maria Litovchenko
+#  LinuxGeek46@both.org
+#
+#  This program is free software; you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation; either version 2 of the License, or
+#  (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#
 
-EC2_NAME='nf-EC2-'$EXECUTING_USER
-CUSTOM_AMI_NAME='ami-nf-aws-batch-'$EXECUTING_USER
+# Help function ---------------------------------------------------------------
+Help() {
+    # Display Help
+    echo "Bash script which creates custom AWS AMI with use of AWS CLI."
+    echo "Please check that AWS CLI is installed and configured prior to run."
+    echo
+    echo "Syntax: create_custom_ami.sh [-p|r|i|u|h]"
+    echo "Arguments:"
+    echo "p     [REQUIRED] AWS profile name. That profile should have"
+    echo "      permissions to create users, user groups, security groups and "
+    echo "      ec2 instances."
+    echo "r     [REQUIRED] AWS region, i.e. eu-west-2. Put it in double "
+    echo "      quotes."
+    echo "i     [REQUIRED] AWS instance type, i.e. t3.2xlarge"
+    echo "u     [REQUIRED] User name of the person executing this script."
+    echo "e     [optional] Name of an EC2 instance. Default: nf-EC2- plus "
+    echo "      value of -u argument"
+    echo "a     [optional] Name under which custom AMI will be saved. Default:"
+    echo "      ami-nf-aws-batch- plus value of -u argument"
+    echo "b     [optional] Name of the base AMI. Default: "
+    echo "      /aws/service/ecs/optimized-ami/amazon-linux-2023/recommended"
+    echo "h     Print this help."
+    echo
+}
 
-BASE_AMI_IMAGE_NAME='/aws/service/ecs/optimized-ami/amazon-linux-2023/recommended'
+# Reading command line arguments ----------------------------------------------
+while getopts ":p:r:i:u:e:a:b:h" opt; do
+    case $opt in
+    p) AWS_PROFILE_NAME="$OPTARG" ;;
+    r) AWS_REGION_NAME="$OPTARG" ;;
+    i) INSTANCE_TYPE="$OPTARG" ;;
+    u) EXECUTING_USER="$OPTARG" ;;
+    e) EC2_NAME="$OPTARG" ;;
+    a) CUSTOM_AMI_NAME="$OPTARG" ;;
+    b) BASE_AMI_IMAGE_NAME="$OPTARG" ;;
+    h)
+        Help
+        exit
+        ;;
+    \?)
+        echo "Invalid option -$OPTARG" >&2
+        Help
+        exit 1
+        ;;
+    esac
+done
+
+shift "$((OPTIND - 1))"
+
+: "${AWS_PROFILE_NAME:?Missing -p}"
+: "${AWS_REGION_NAME:?Missing -r}"
+: "${INSTANCE_TYPE:?Missing -i}"
+: "${EXECUTING_USER:?Missing -u}"
+if [ -z "${EC2_NAME}" ]; then
+    EC2_NAME='nf-EC2-'$EXECUTING_USER
+fi
+if [ -z "${CUSTOM_AMI_NAME}" ]; then
+    CUSTOM_AMI_NAME='ami-nf-aws-batch-'$EXECUTING_USER
+fi
+if [ -z "${BASE_AMI_IMAGE_NAME}" ]; then
+    BASE_AMI_IMAGE_NAME='/aws/service/ecs/optimized-ami/amazon-linux-2023/recommended'
+fi
+
+timestamp=$(date -I)
+echo "[""$timestamp""] Input arguments:"
+echo "               -p (AWS profile name): "$AWS_PROFILE_NAME
+echo "               -r (AWS region): "$AWS_REGION_NAME
+echo "               -i (EC2 insctance type): "$INSTANCE_TYPE
+echo "               -u (Executing user ID): "$EXECUTING_USER
+echo "               -e (Name to be given to EC2 instance): "$EC2_NAME
+echo "               -a (Name to be given to custom AMI): "$CUSTOM_AMI_NAME
+echo "               -b (Base AMI name): "$BASE_AMI_IMAGE_NAME
+
+# Main script -----------------------------------------------------------------
+# default values
 KEY_PAIR_NAME='custom_ami_creation_keypair'
 EC2_DEFAULT_USER_NAME='ec2-user'
 
@@ -16,12 +118,7 @@ export AWS_PROFILE=$AWS_PROFILE_NAME
 # set AWS region
 export AWS_REGION=$AWS_REGION_NAME
 
-# Build a custom Amazon Machine Image which will contain all the
-# software needed for execution of your Nextflow tasks. Usually, if the
-# pipeline is properly containerized one would only need Docker & AWS CLI.
-# AWS CLI is needed for communication between AWS batch and EC2 instance which
-# runs the task.
-
+# Step 1: get VPC ID and default subnet ID ------------------------------------
 # Step 1: get VPC ID and default subnet ID. In case your default subnet is
 # private, you may need to use VPN to run this script. As everything done below
 # is based on publicly accessible data and does not disclose any private data,
@@ -36,19 +133,15 @@ read -r SECURITY_GROUP_ID <<<"$(aws ec2 create-security-group --group-name $EC2_
     --output text)"
 # add rules to security group: allow inbound traffic on TCP port 22 to support SSH connections
 aws ec2 authorize-security-group-ingress --group-id "$SECURITY_GROUP_ID" \
-    --protocol tcp \
-    --port 22 --cidr '0.0.0.0/0'
+    --protocol tcp --port 22 --cidr '0.0.0.0/0'
 aws ec2 authorize-security-group-egress --group-id "$SECURITY_GROUP_ID" \
-    --protocol tcp \
-    --port 22 --cidr '0.0.0.0/0'
+    --protocol tcp --port 22 --cidr '0.0.0.0/0'
 aws ec2 authorize-security-group-ingress --group-id "$SECURITY_GROUP_ID" \
-    --protocol tcp \
-    --port 80 --cidr '0.0.0.0/0'
+    --protocol tcp --port 80 --cidr '0.0.0.0/0'
 aws ec2 authorize-security-group-egress --group-id "$SECURITY_GROUP_ID" \
-    --protocol tcp \
-    --port 80 --cidr '0.0.0.0/0'
+    --protocol tcp --port 80 --cidr '0.0.0.0/0'
 
-# Step 2: Initialize EC2 base instance
+# Step 2: Initialize EC2 base instance ----------------------------------------
 # Amazon already have a base Linux AMI with the pre-installed Docker for this
 # available optimised to use with AWS batch. Let's retrive the AMI ID of that
 # image.
@@ -71,11 +164,11 @@ read -r INSTANCE_ID <<<"$(aws ec2 run-instances --image-id $BASE_AMI_IMAGE_ID \
     --subnet-id $SUBNET_ID \
     --block-device-mappings '[
                                 {
-                                    'DeviceName': '/dev/xvda',
-                                    'Ebs': {
-                                        'VolumeSize': 100,
-                                        'VolumeType': 'standard',
-                                        'DeleteOnTermination': true
+                                    "DeviceName": "/dev/xvda",
+                                    "Ebs": {
+                                        "VolumeSize": 100,
+                                        "VolumeType": "standard",
+                                        "DeleteOnTermination": true
                                     }
                                 }
                             ]' \
@@ -88,31 +181,45 @@ read -r PUBLIC_DNS_NAME <<<"$(aws ec2 describe-instances --instance-ids "$INSTAN
     --query 'Reservations[].Instances[].PublicDnsName' \
     --output text)"
 
-# Step 3: Install needed software on EC2
+# Step 3: Install needed software on EC2 --------------------------------------
 # login into EC2
 ssh -i $KEY_PAIR_NAME'.pem' $EC2_DEFAULT_USER_NAME'@'"$PUBLIC_DNS_NAME"
 
+# configure docker
 cd "$HOME" || exit
 sudo service docker start
 sudo usermod -a -G docker ec2-user
+# install aws cli
 sudo yum install -y bzip2 wget
 wget https://repo.continuum.io/miniconda/Miniconda3-latest-Linux-x86_64.sh
 bash Miniconda3-latest-Linux-x86_64.sh -b -f -p "$HOME"/miniconda
 "$HOME"/miniconda/bin/conda install -c conda-forge -y awscli
 rm Miniconda3-latest-Linux-x86_64.sh
+# install ecs
 sudo yum install ecs-init
 sudo systemctl start ecs
+# install git
+sudo yum install git-all -y
+# install java
+sudo yum install zip unzip -y
+curl -s "https://get.sdkman.io" | bash
+source "/home/ec2-user/.sdkman/bin/sdkman-init.sh"
+sdk install java 21.0.3-tem
+# install nextflow
+curl -s https://get.nextflow.io | bash
+chmod +x nextflow
+sudo mv nextflow /usr/local/bin
 
 # exit from EC2
 exit
 
-# Step 4: Create custom AMI
+# Step 4: Create custom AMI ---------------------------------------------------
 read -r CUSTOM_AMI_ID <<<"$(aws ec2 create-image --instance-id $INSTANCE_ID \
     --name $CUSTOM_AMI_NAME \
     --no-reboot \
     --output text)"
 
-# Step 5: clean up
+# Step 5: clean up ------------------------------------------------------------
 aws ec2 terminate-instances --instance-ids $INSTANCE_ID
 aws ec2 delete-security-group --group-id $SECURITY_GROUP_ID
 aws ec2 delete-key-pair --key-name $KEY_PAIR_NAME
