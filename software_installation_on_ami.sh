@@ -49,6 +49,7 @@ sudo yum install zip unzip -y
 curl -s "https://get.sdkman.io" | bash
 source "/home/ec2-user/.sdkman/bin/sdkman-init.sh"
 sdk install java 21.0.3-tem
+source ~/.bashrc
 
 # install nextflow
 curl -s https://get.nextflow.io | bash
