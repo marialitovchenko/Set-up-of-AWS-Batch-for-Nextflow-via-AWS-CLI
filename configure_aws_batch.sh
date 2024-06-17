@@ -273,7 +273,7 @@ echo "[""$timestamp""] Created job queue ""$BATCH_JOB_QUEUE_NAME"
 aws s3api create-bucket --bucket "$S3_BUCKET_NAME" \
     --create-bucket-configuration LocationConstraint="$AWS_REGION_NAME"
 timestamp=$(date -I)
-echo "[""$timestamp""] Created S3 bucket: ""$BATCH_JOB_QUEUE_NAME"
+echo "[""$timestamp""] Created S3 bucket: ""$S3_BUCKET_NAME"
 
 timestamp=$(date -I)
 echo "[""$timestamp""] Success!"
