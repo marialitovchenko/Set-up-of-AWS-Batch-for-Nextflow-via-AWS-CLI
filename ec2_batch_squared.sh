@@ -169,15 +169,7 @@ aws configure
 
 sudo yum install git-all -y
 sudo yum install zip unzip -y
-
-curl -s "https://get.sdkman.io" | bash
-source "/home/ec2-user/.sdkman/bin/sdkman-init.sh"
-sdk install java 21.0.3-tem
-
-curl -s https://get.nextflow.io | bash
-chmod +x nextflow
-sudo mv nextflow /usr/local/bin
-
+ 
 nextflow pull rnaseq-nf
 nextflow -C nextflow.config run rnaseq-nf \
     -profile batch \
