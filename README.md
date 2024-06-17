@@ -270,21 +270,22 @@ chmod +x clean_up_aws_batch.sh
 ```
 
 Please see below the full list of input arguments:
--`p` [REQUIRED] AWS profile name. That profile should have permissions to 
+
+- `p` [REQUIRED] AWS profile name. That profile should have permissions to 
 delete users, user groups, security groups and ec2 instances.
--`r` [REQUIRED] AWS region, i.e. `eu-west-2`. Put it in double quotes.
--`u` [REQUIRED] User name of the person executing this script.
--`i` [optional] User name of a user under which Nextflow assessed AWS batch. 
+- `r` [REQUIRED] AWS region, i.e. `eu-west-2`. Put it in double quotes.
+- `u` [REQUIRED] User name of the person executing this script.
+- `i` [optional] User name of a user under which Nextflow assessed AWS batch. 
 Default: `nf-program-access-` plus value of `-u` argument.
--`g` [optional] User group name to which user under which Nextflow assessed AWS
+- `g` [optional] User group name to which user under which Nextflow assessed AWS
 batch was assigned to. Default: `nf-group-` plus value of `-u` argument.
--`e` [optional] Name of an EC2 instance on which Nextflow launcher was set. 
+- `e` [optional] Name of an EC2 instance on which Nextflow launcher was set. 
 Default: `nf-EC2-` plus value of `-u` argument.
--`c` [optional] Name of the AWS Batch compute environment under which Nextflow
+- `c` [optional] Name of the AWS Batch compute environment under which Nextflow
 had run jobs. Default: `nf-aws-batch-` plus value of `-u` argument.
--`j` [optional] Name of the AWS Batch job queue under which Nextflow had run
+- `j` [optional] Name of the AWS Batch job queue under which Nextflow had run
 jobs. Default: `nf-queue-` plus value of `-u` argument.
--`h` print this help
+- `h` print this help
 
 > Attention! `clean_up_aws_batch.sh` will not delete custom AMI created at step
 1 or S3 bucket created at step 2 as they can be reused (AMI) or contain results
