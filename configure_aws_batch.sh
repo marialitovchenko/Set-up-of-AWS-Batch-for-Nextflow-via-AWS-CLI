@@ -245,7 +245,7 @@ batch_compute_config='{
                         "ec2KeyPair": "'$KEY_PAIR_NAME'",
                         "instanceRole": "ecsInstanceRole",
                         "bidPercentage": 99,
-                        "spotIamFleetRole": "AmazonEC2SpotFleetRole"
+                        "spotIamFleetRole": "'$IAM_ROLE_NAME'"
                      }'
 # create the compute environment
 aws batch create-compute-environment \

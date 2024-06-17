@@ -41,8 +41,10 @@ Help() {
     echo "r     [REQUIRED] AWS region, i.e. eu-west-2. Put it in double "
     echo "      quotes."
     echo "t     [REQUIRED] AWS instance type, i.e. t3.2xlarge"
-    echo "i      "
     echo "u     [REQUIRED] User name of the person executing this script."
+    echo "i     [optional] User name to be given to a user under which "
+    echo "       Nextflow will assess AWS batch. Default: nf-program-access-"
+    echo "       plus value of -u argument."
     echo "e     [optional] Name of an EC2 instance to be created. Default: "
     echo "      nf-EC2- plus value of -u argument."
     echo "a     [optional] Name of the custom AMI to be used. Default:"
@@ -57,8 +59,8 @@ while getopts ":p:r:t:i:u:e:a:h" opt; do
     p) AWS_PROFILE_NAME="$OPTARG" ;;
     r) AWS_REGION_NAME="$OPTARG" ;;
     t) INSTANCE_TYPE="$OPTARG" ;;
-    i) IAM_USER_NAME="$OPTARG" ;;
     u) EXECUTING_USER="$OPTARG" ;;
+    i) IAM_USER_NAME="$OPTARG" ;;
     e) EC2_NAME="$OPTARG" ;;
     a) CUSTOM_AMI_NAME="$OPTARG" ;;
     h)
@@ -117,7 +119,7 @@ read -r SUBNET_ID <<<"$(aws ec2 describe-subnets \
     --filters 'Name=default-for-az,Values=true' \
     --query 'Subnets[*].[SubnetId]' --output text | head -1)"
 
-# create a security group
+# get ID of a security group
 read -r SECURITY_GROUP_ID <<<"$(aws ec2 describe-security-groups \
     --group-name $EC2_NAME --query "SecurityGroups[*].[GroupId]" \
     --output text)"
@@ -147,7 +149,7 @@ read -r INSTANCE_ID <<<"$(aws ec2 run-instances --image-id $CUSTOM_AMI_ID \
                             ]' \
     --output text \
     --query 'Instances[*].[InstanceId]')"
-
+aws ec2 create-tags --resources $INSTANCE_ID --tags Key=Name,Value=$EC2_NAME
 # wait for the instance to be running
 aws ec2 wait instance-status-ok --instance-ids "$INSTANCE_ID"
 
@@ -174,6 +176,7 @@ echo "region = "$AWS_REGION_NAME >> config
 
 scp -i $KEY_PAIR_NAME'.pem' credentials config \
   $EC2_DEFAULT_USER_NAME'@'$PUBLIC_DNS_NAME":/home/"$EC2_DEFAULT_USER_NAME"/.aws/"
+rm credentials config
 
 timestamp=$(date -I)
 echo "[""$timestamp""] The Nextflow launcher EC2 instance is ready. You may "

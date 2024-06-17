@@ -38,7 +38,7 @@ Help() {
     echo "Syntax: clean_up_aws_batch.sh [-p|r|u|a|i|g|e|c|j|h]"
     echo "Arguments:"
     echo "p     [REQUIRED] AWS profile name. That profile should have"
-    echo "      permissions to create users, user groups, security groups and"
+    echo "      permissions to delete users, user groups, security groups and"
     echo "      ec2 instances."
     echo "r     [REQUIRED] AWS region, i.e. eu-west-2. Put it in double "
     echo "      quotes."
