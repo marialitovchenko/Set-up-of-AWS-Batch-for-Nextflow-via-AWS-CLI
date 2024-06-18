@@ -24,6 +24,10 @@ The scripts operate under assumption that you already have VPC, subnetworks and
 users/profiles with privileges to create users, user groups, security groups,
 ec2 instances, computing environments and job queues.
 
+> Important note: All **EC2 instances** created by scripts will be **public**,
+i.e. accessible to the outside Internet. Please be careful and do not put 
+sensitive information on them.
+
 # Step 1: create the custom AMI
 ![schema](nextflow-and-aws-batch.webp "Nextflow on AWS Batch schema") The image
 is taken from [here](https://seqera.io/blog/nextflow-and-aws-batch-inside-the-integration-part-1-of-3/).
