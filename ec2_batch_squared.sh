@@ -1,14 +1,14 @@
 #!/bin/bash
 AWS_PROFILE_NAME="ngs_workflows_dev"
 AWS_REGION_NAME="eu-west-2"
-AMI_IMAGE_ID="ami-06373f703eb245f45" # Amazon Linux 2023 AMI
+BASE_AMI_IMAGE_ID="ami-06373f703eb245f45" # Amazon Linux 2023 AMI
 INSTANCE_TYPE="t3.2xlarge"
 EXECUTING_USER="mlitovchenko"
 S3_BUCKET_NAME="s3-test"
 
 IAM_USER_NAME=nextflow-programmatic-access-$EXECUTING_USER
 IAM_GROUP_NAME=nextflow-group-$EXECUTING_USER
-EC2_NAME="nextflow-EC2-"-$EXECUTING_USER
+EC2_NAME="nextflow-EC2-"$EXECUTING_USER
 
 IAM_ROLE_NAME=AmazonEC2SpotFleetRole
 KEY_PAIR_NAME=$EC2_NAME"-KeyPair"
@@ -26,9 +26,14 @@ export AWS_REGION=$AWS_REGION_NAME
 # https://docs.aws.amazon.com/IAM/latest/UserGuide/id_users_create.html#id_users_create_cliwpsapi
 # create a programmatic user
 aws iam create-user --user-name $IAM_USER_NAME
+read -r IAM_USER_ID <<<$(aws iam list-users --query "Users[*].[UserName, UserId]" \
+                                            --output text | grep $IAM_USER_NAME | cut -f2)
 
 # give the user programmatic access 
-aws iam create-access-key --user-name $IAM_USER_NAME
+read -r ACCESS_KEY_ID ACCESS_KEY_SECRET <<<$(aws iam create-access-key \
+                                                 --user-name $IAM_USER_NAME \
+                                                 --output text | \
+                                                 cut -f2,4)
 
 # create a user group
 aws iam create-group      --group-name $IAM_GROUP_NAME
@@ -37,8 +42,10 @@ aws iam add-user-to-group --user-name  $IAM_USER_NAME \
 
 # attach access policies to user group
 aws iam attach-group-policy --group-name $IAM_GROUP_NAME \
-                            --policy-arn arn:aws:iam::aws:policy/AmazonEC2FullAccess \
-                            --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess \
+                            --policy-arn arn:aws:iam::aws:policy/AmazonEC2FullAccess
+aws iam attach-group-policy --group-name $IAM_GROUP_NAME \
+                            --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess
+aws iam attach-group-policy --group-name $IAM_GROUP_NAME \
                             --policy-arn arn:aws:iam::aws:policy/AWSBatchFullAccess 
 
 # create permission roles for running AWS Batch
@@ -59,7 +66,11 @@ aws iam create-role --role-name $IAM_ROLE_NAME \
 aws iam attach-role-policy --policy-arn arn:aws:iam::aws:policy/service-role/AmazonEC2SpotFleetTaggingRole \
                            --role-name $IAM_ROLE_NAME
 
+                            --policy-arn arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+
+
 # Step 2 Build a custom Amazon Machine Image
+aws ssm get-parameters --names /aws/service/ecs/optimized-ami/amazon-linux-2023/recommended
 
 # get VPC ID and PUBLIC(!) subnet ID. If subnet is not public and doesn't allow
 # map of public ip on launch, we won't be able to ssh to it.
@@ -76,9 +87,15 @@ read -r SECURITY_GROUP_ID <<<$(aws ec2 create-security-group --group-name $EC2_N
 aws ec2 authorize-security-group-ingress --group-id $SECURITY_GROUP_ID \
                                          --protocol tcp \
                                          --port 22 --cidr "0.0.0.0/0"
+aws ec2 authorize-security-group-egress --group-id $SECURITY_GROUP_ID \
+                                        --protocol tcp \
+                                        --port 22 --cidr "0.0.0.0/0"
 aws ec2 authorize-security-group-ingress --group-id $SECURITY_GROUP_ID \
                                          --protocol tcp \
                                          --port 80 --cidr "0.0.0.0/0"
+aws ec2 authorize-security-group-egress --group-id $SECURITY_GROUP_ID \
+                                        --protocol tcp \
+                                        --port 80 --cidr "0.0.0.0/0"
 
 # create a key pair
 aws ec2 create-key-pair --key-name $KEY_PAIR_NAME \
@@ -87,7 +104,7 @@ aws ec2 create-key-pair --key-name $KEY_PAIR_NAME \
 chmod 400 $KEY_PAIR_NAME".pem"
 
 # create an instance
-read -r INSTANCE_ID <<<$(aws ec2 run-instances --image-id $AMI_IMAGE_ID \
+read -r INSTANCE_ID <<<$(aws ec2 run-instances --image-id $BASE_AMI_IMAGE_ID \
                                                --count 1 \
                                                --instance-type $INSTANCE_TYPE \
                                                --key-name $KEY_PAIR_NAME \
@@ -98,7 +115,7 @@ read -r INSTANCE_ID <<<$(aws ec2 run-instances --image-id $AMI_IMAGE_ID \
                                                         "DeviceName": "/dev/xvda",
                                                         "Ebs": {
                                                             "VolumeSize": 100,
-                                                            "VolumeType": standard,
+                                                            "VolumeType": "standard",
                                                             "DeleteOnTermination": true
                                                         }
                                                     }
@@ -146,28 +163,39 @@ read -r CUSTOM_AMI_ID <<<$(aws ec2 create-image --instance-id $INSTANCE_ID \
                                                 --output text)
 
 # Step 3 Define AWS Batch compute environment
+batch_compute_config='{
+                        "type": "SPOT",
+                        "allocationStrategy": "SPOT_CAPACITY_OPTIMIZED",
+                        "minvCpus": 0,
+                        "desiredvCpus": 0,
+                        "maxvCpus": 1024,
+                        "instanceTypes": ["optimal"],
+                        "imageId": "'$CUSTOM_AMI_ID'",
+                        "subnets": ["'$SUBNET_ID'", "subnet-05534e5ba9e1491c1", "subnet-092cd8753dd23c57e"],
+                        "securityGroupIds": ["'$SECURITY_GROUP_ID'"],
+                        "ec2KeyPair": "'$KEY_PAIR_NAME'",
+                        "instanceRole": "ecsInstanceRole",
+                        "bidPercentage": 99,
+                        "spotIamFleetRole": "AmazonEC2SpotFleetRole"
+                     }'
+# batch_compute_config='{
+#                         "type": "EC2",
+#                         "allocationStrategy": "BEST_FIT_PROGRESSIVE",
+#                         "minvCpus": 0,
+#                         "desiredvCpus": 0,
+#                         "maxvCpus": 128,
+#                         "instanceTypes": ["optimal"],
+#                         "imageId": "ami-02bdc46746b0733da",
+#                         "subnets": ["'$SUBNET_ID'", "subnet-05534e5ba9e1491c1", "subnet-092cd8753dd23c57e"],
+#                         "securityGroupIds": ["'$SECURITY_GROUP_ID'"],
+#                         "ec2KeyPair": "'$KEY_PAIR_NAME'",
+#                         "instanceRole": "arn:aws:iam::352918899944:instance-profile/ecsInstanceRole"
+#                      }'
 # create the compute environment
 aws batch create-compute-environment --compute-environment-name $BATCH_COMPUTE_ENV_NAME \
                                      --state ENABLED \
                                      --type MANAGED \
-                                     --compute-resources '
-                                     {
-                                        "type": "SPOT",
-                                        "allocationStrategy": "BEST_FIT_PROGRESSIVE",
-                                        "minvCpus": 0,
-                                        "maxvCpus": 256,
-                                        "desiredvCpus": 0,
-                                        "instanceTypes": ["c4.xlarge","c5.4xlarge"],
-                                        "imageId": "ami-02bdc46746b0733da",
-                                        "subnets": ["subnet-06ad429ad1e0249a9"],
-                                        "securityGroupIds": ["sg-0a5fd049e80442076"],
-                                        "ec2KeyPair": "nextflow-EC2--mlitovchenko-KeyPair",
-                                        "instanceRole": "ecsInstanceRole",
-                                        "placementGroup": "string",
-                                        "bidPercentage": 50,
-                                        "spotIamFleetRole": "AmazonEC2SpotFleetRole"  
-                                    }'
-
+                                     --compute-resources $batch_compute_config
 # Step 4 Create an AWS Batch Job queue
 aws batch create-job-queue --job-queue-name $BATCH_JOB_QUEUE_NAME \
                            --state ENABLED \
@@ -176,7 +204,7 @@ aws batch create-job-queue --job-queue-name $BATCH_JOB_QUEUE_NAME \
                            [
                                 {
                                     "order": 1,
-                                    "computeEnvironment": "nextflow_aws_batch_mlitovchenko"
+                                    "computeEnvironment": "'$BATCH_COMPUTE_ENV_NAME'"
                                 }
                             ]'
 
